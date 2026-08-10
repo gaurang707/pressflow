@@ -1,0 +1,3 @@
+/**
+ * PressFlow frontend scripts.
+ */
