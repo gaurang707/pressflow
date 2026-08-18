@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace PressFlow\Lifecycle;
 
+use PressFlow\Database\SchemaVerifier;
+
 final class Activator
 {
     private const DB_VERSION = '1.0.0';
@@ -21,42 +23,76 @@ final class Activator
             $wpdb->get_charset_collate()
         );
 
+        $tableNames = array_keys($schemaQueries);
+
         $installedVersion = (string) get_option(
             self::DB_VERSION_OPTION,
             ''
         );
 
+        $missingTables = SchemaVerifier::missingTables(
+            $tableNames
+        );
+
         /*
-         * Skip database processing when:
-         * 1. The installed schema version is current.
-         * 2. Every required table already exists.
+         * Skip schema processing when the installed schema is current
+         * and every required table exists.
          */
         if (
             self::DB_VERSION === $installedVersion
-            && self::allTablesExist(array_keys($schemaQueries))
+            && [] === $missingTables
         ) {
+            update_option(
+                'pressflow_plugin_version',
+                PRESSFLOW_VERSION,
+                false
+            );
+
             return;
         }
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
         /*
-         * dbDelta checks each existing table and creates or updates it.
+         * Creates missing tables and updates existing table structures.
          */
         dbDelta(array_values($schemaQueries));
 
         /*
-         * Verify that dbDelta successfully created all required tables.
+         * Confirm that dbDelta successfully created every required table.
          */
-        if (! self::allTablesExist(array_keys($schemaQueries))) {
-            throw new \RuntimeException(
-                'PressFlow could not create all required database tables.'
+        $missingTables = SchemaVerifier::missingTables(
+            $tableNames
+        );
+
+        if ([] !== $missingTables) {
+            wp_die(
+                esc_html(
+                    sprintf(
+                        'PressFlow activation failed. Missing tables: %s',
+                        implode(', ', $missingTables)
+                    )
+                ),
+                esc_html__(
+                    'PressFlow database verification failed',
+                    'pressflow'
+                ),
+                ['back_link' => true]
             );
         }
 
+        /*
+         * Store versions only after successful schema verification.
+         */
         update_option(
             self::DB_VERSION_OPTION,
             self::DB_VERSION,
+            false
+        );
+
+        update_option(
+            'pressflow_plugin_version',
+            PRESSFLOW_VERSION,
             false
         );
     }
@@ -253,41 +289,5 @@ final class Activator
             ) {$charsetCollate};";
 
         return $queries;
-    }
-
-    /**
-     * Checks whether every required table exists.
-     *
-     * @param array<int, string> $tableNames
-     */
-    private static function allTablesExist(
-        array $tableNames
-    ): bool {
-        foreach ($tableNames as $tableName) {
-            if (! self::tableExists($tableName)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Checks whether one database table exists.
-     */
-    private static function tableExists(
-        string $tableName
-    ): bool {
-        global $wpdb;
-
-        $query = $wpdb->prepare(
-            'SHOW TABLES LIKE %s',
-            $wpdb->esc_like($tableName)
-        );
-
-        $existingTable = $wpdb->get_var($query);
-
-        return is_string($existingTable)
-            && $existingTable === $tableName;
     }
 }
